@@ -2,13 +2,14 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
+#include <assert.h>
 
 #include "sort.h"
+
 #include "parlay/primitives.h"
 #include "parlay/parallel.h"
 #include "parlay/sequence.h"
 #include "parlay/utilities.h"
-#include <assert.h>
 
 #ifdef DEBUG
     #define debug(var) \
@@ -84,22 +85,34 @@ void sequence_sort(std::vector<int>& v) {
 
 void copy_sequence(const parlay::sequence<int>& source, std::vector<int>& dest) {
   // This *might* be more efficient than a parallel-for copying each element individually
-  parlay::blocked_for(0, source.size(), 512, [&](size_t i, size_t start, size_t end) {
-    std::copy(source.begin() + start, source.begin() + end, dest.begin() + start);
-  });
+//   parlay::blocked_for(0, source.size(), 512, [&](size_t i, size_t start, size_t end) {
+//     std::copy(source.begin() + start, source.begin() + end, dest.begin() + start);
+//   });
+    parlay::parallel_for(0, source.size(), [&source, &dest](const size_t i){
+        dest[i] = source[i];
+    });
 }
 
-const size_t THRESHOLD_TO_SEQUENCE = 10000;
+void copy_sequence(const std::vector<int>& source, parlay::sequence<int>& dest) {
+  // This *might* be more efficient than a parallel-for copying each element individually
+    parlay::parallel_for(0, source.size(), [&source, &dest](const size_t i){
+        dest[i] = source[i];
+    });
+}
+
+const size_t THRESHOLD_TO_SEQUENCE = 1000000;
 
 void parallel_quick_sort(parlay::sequence<int>& seq, const size_t l, const size_t r, parlay::sequence<int>& flags, parlay::sequence<int>& tmp_seq) {
     if (r - l <= 1) {
         return;
     }
 
+#ifndef DEBUG
     if (r - l < THRESHOLD_TO_SEQUENCE) {
         std::sort(seq.begin() + l, seq.begin() + r);
         return;
     }
+#endif
 
     debug(l);
     debug(r);
@@ -125,7 +138,7 @@ void parallel_quick_sort(parlay::sequence<int>& seq, const size_t l, const size_
         if ((i == l && flags[i] != 0) || (i != l && flags[i] != flags[i - 1])) {
             seq[l + flags[i] - 1] = tmp_seq[i];
         }
-    });
+    }, THRESHOLD_TO_SEQUENCE);
     print("filled left part");
     cdebug(seq);
 
@@ -181,5 +194,11 @@ void parallel_sort(std::vector<int>& v) {
     parlay::sequence<int> seq(v.begin(), v.end());
     parallel_quick_sort(seq, 0, v.size(), flags, tmp_seq);
 
+    copy_sequence(seq, v);
+}
+
+void ParallelSorter::parallel_sort(std::vector<int> &v) {
+    copy_sequence(v, seq);
+    parallel_quick_sort(this->seq, 0, v.size(), this->flags, this->tmp_seq);
     copy_sequence(seq, v);
 }

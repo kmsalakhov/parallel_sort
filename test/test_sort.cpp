@@ -134,3 +134,43 @@ TEST(SortTest, ParallelBigRandomOrder) {
     parallel_sort(vec);
     EXPECT_EQ(vec, expected);
 }
+
+TEST(SortTest, ParallelSorterEmptyVector) {
+    std::vector<int> vec = {};
+    ParallelSorter sorter(vec.size());
+    sorter.parallel_sort(vec);
+    std::vector<int> expected = {};
+    EXPECT_EQ(vec, expected);
+}
+
+TEST(SortTest, ParallelSorterSingleElement) {
+    std::vector<int> vec = {42};
+    ParallelSorter sorter(vec.size());
+    sorter.parallel_sort(vec);
+    std::vector<int> expected = {42};
+    EXPECT_EQ(vec, expected);
+}
+
+TEST(SortTest, ParallelSorterAlreadySorted) {
+    std::vector<int> vec = {1, 2, 3, 4, 5};
+    ParallelSorter sorter(vec.size());
+    sorter.parallel_sort(vec);
+    std::vector<int> expected = {1, 2, 3, 4, 5};
+    EXPECT_EQ(vec, expected);
+}
+
+TEST(SortTest, ParallelSorterReverseSorted) {
+    std::vector<int> vec = {5, 4, 3, 2, 1};
+    ParallelSorter sorter(vec.size());
+    sorter.parallel_sort(vec);
+    std::vector<int> expected = {1, 2, 3, 4, 5};
+    EXPECT_EQ(vec, expected);
+}
+
+TEST(SortTest, ParallelSorterRandomOrder) {
+    std::vector<int> vec = {3, 1, 4, 1, 5, 9, 2, 6};
+    ParallelSorter sorter(vec.size());
+    sorter.parallel_sort(vec);
+    std::vector<int> expected = {1, 1, 2, 3, 4, 5, 6, 9};
+    EXPECT_EQ(vec, expected);
+}
