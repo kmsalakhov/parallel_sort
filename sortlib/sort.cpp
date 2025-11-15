@@ -114,9 +114,6 @@ void parallel_quick_sort(parlay::sequence<int>& seq, const size_t l, const size_
     }
 #endif
 
-    debug(l);
-    debug(r);
-    cdebug(seq);
     const int size = r - l;
     const int m = l + r >> 1;
     const int pivot = seq[m];
@@ -125,53 +122,24 @@ void parallel_quick_sort(parlay::sequence<int>& seq, const size_t l, const size_
         flags[i] = seq[i] < pivot;
         tmp_seq[i] = seq[i];
     });
-    print("filled flags and tmp_seq");
-    cdebug(flags);
-    cdebug(tmp_seq);
 
     const int left_size = parlay::scan_inclusive_inplace(flags.cut(l, r));
-    print("scanned flags");
-    debug(left_size);
-    cdebug(flags);
 
-    parlay::parallel_for(l, r, [&flags, &seq, &tmp_seq, l](const size_t i) {
+    parlay::parallel_for(l, r, [&flags, &seq, &tmp_seq, l, left_size](const size_t i) {
         if ((i == l && flags[i] != 0) || (i != l && flags[i] != flags[i - 1])) {
             seq[l + flags[i] - 1] = tmp_seq[i];
-        }
-    }, THRESHOLD_TO_SEQUENCE);
-    print("filled left part");
-    cdebug(seq);
-
-    parlay::parallel_for(l, r, [&flags, &tmp_seq, pivot](const size_t i) {
-        flags[i] = tmp_seq[i] >= pivot;
-    });
-    print("filled flags for right part");
-    cdebug(flags);
-
-    const int right_size = parlay::scan_inclusive_inplace(flags.cut(l, r));
-    assert(left_size + right_size == size);
-    print("scanned flags for right part");
-    cdebug(flags);
-
-    parlay::parallel_for(l, r, [&seq, &tmp_seq, &flags, left_size, l](const size_t i) {
-        if ((i == l && flags[i] != 0) || (i != l && flags[i] != flags[i - 1])) {
-            seq[l + left_size + flags[i] - 1] = tmp_seq[i];
+        } else {
+            seq[left_size + (i - flags[i])] = tmp_seq[i];
         }
     });
-    print("filled left part, now seq should be correct");
-    cdebug(seq);
 
-    auto slice = seq.cut(l, r);
-    auto pivot_it = parlay::find(slice, pivot);
+    const auto slice = seq.cut(l + left_size, r);
+    const auto pivot_it = parlay::find(slice, pivot);
     assert(pivot_it != slice.end());
-    const size_t pivot_id = l + (pivot_it - slice.begin());
+    
+    const size_t pivot_id = l + left_size + (pivot_it - slice.begin());
     const size_t new_pivot_id = l + left_size;
     std::swap(seq[pivot_id], seq[new_pivot_id]);
-    print("getted pivot_id and swapped it");
-    debug(pivot_id);
-    debug(new_pivot_id);
-    debug(l + left_size);
-    cdebug(seq);
 
     parlay::parallel_do(
         [&seq, l, new_pivot_id, &flags, &tmp_seq]() {
@@ -181,7 +149,6 @@ void parallel_quick_sort(parlay::sequence<int>& seq, const size_t l, const size_
             parallel_quick_sort(seq, new_pivot_id + 1, r, flags, tmp_seq);
         }
     );
-    print("finished");
 }
 
 void parallel_sort(std::vector<int>& v) {
