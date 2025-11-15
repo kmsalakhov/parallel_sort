@@ -100,7 +100,7 @@ void copy_sequence(const std::vector<int>& source, parlay::sequence<int>& dest) 
     });
 }
 
-const size_t THRESHOLD_TO_SEQUENCE = 1000000;
+const size_t THRESHOLD_TO_SEQUENCE = 100000;
 
 void parallel_quick_sort(parlay::sequence<int>& seq, const size_t l, const size_t r, parlay::sequence<int>& flags, parlay::sequence<int>& tmp_seq) {
     if (r - l <= 1) {
@@ -136,7 +136,7 @@ void parallel_quick_sort(parlay::sequence<int>& seq, const size_t l, const size_
     const auto slice = seq.cut(l + left_size, r);
     const auto pivot_it = parlay::find(slice, pivot);
     assert(pivot_it != slice.end());
-    
+
     const size_t pivot_id = l + left_size + (pivot_it - slice.begin());
     const size_t new_pivot_id = l + left_size;
     std::swap(seq[pivot_id], seq[new_pivot_id]);
