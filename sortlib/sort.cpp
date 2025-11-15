@@ -8,6 +8,44 @@
 #include "parlay/parallel.h"
 #include "parlay/sequence.h"
 #include "parlay/utilities.h"
+#include <assert.h>
+
+#ifdef DEBUG
+    #define debug(var) \
+        do { \
+            std::cout << #var << " = " << (var) << std::endl; \
+        } while(0)
+
+    template<typename T>
+    void print_container(const T& container, const std::string& name) {
+        std::cout << name << " = [";
+        bool first = true;
+        for (const auto& elem : container) {
+            if (!first) std::cout << ", ";
+            std::cout << elem;
+            first = false;
+        }
+        std::cout << "]" << std::endl;
+    }
+
+    #define cdebug(var) \
+        print_container(var, #var)
+
+    #define print(var) \
+        do { \
+            std::cout << (var) << std::endl; \
+        } while(0)
+
+#else
+
+    #define debug(var) do {} while(0)
+    #define cdebug(var) do {} while(0)
+    #define print(var) do {} while(0)
+
+#endif
+
+const size_t MAX_VECTOR_SIZE = 1e8;
+const size_t THREADS_COUNT = 4;
 
 int partition(std::vector<int>& v, int l, int r) {
     const int m = l + r >> 1;
@@ -44,209 +82,104 @@ void sequence_sort(std::vector<int>& v) {
     }
 }
 
-void parallel_quick_sort_hybrid(parlay::sequence<int>& seq, size_t l, size_t r, int depth = 0) {
-    if (l >= r || l >= seq.size() || r >= seq.size() || l > r) {
+void copy_sequence(const parlay::sequence<int>& source, std::vector<int>& dest) {
+  // This *might* be more efficient than a parallel-for copying each element individually
+  parlay::blocked_for(0, source.size(), 512, [&](size_t i, size_t start, size_t end) {
+    std::copy(source.begin() + start, source.begin() + end, dest.begin() + start);
+  });
+}
+
+const size_t THRESHOLD_TO_SEQUENCE = 10000;
+
+void parallel_quick_sort(parlay::sequence<int>& seq, const size_t l, const size_t r, parlay::sequence<int>& flags, parlay::sequence<int>& tmp_seq) {
+    if (r - l <= 1) {
         return;
     }
-    
-    const size_t global_threshold = 10000;
-    
-    const int max_depth = 2 * static_cast<int>(std::log2(parlay::num_workers() + 1));
-    
-    if (r - l + 1 < global_threshold || depth >= max_depth) {
-        std::sort(seq.begin() + l, seq.begin() + r + 1);
+
+    if (r - l < THRESHOLD_TO_SEQUENCE) {
+        std::sort(seq.begin() + l, seq.begin() + r);
         return;
     }
-    
-    size_t mid = l + (r - l) / 2;
-    if (seq[l] > seq[mid]) std::swap(seq[l], seq[mid]);
-    if (seq[mid] > seq[r]) std::swap(seq[mid], seq[r]);
-    if (seq[l] > seq[mid]) std::swap(seq[l], seq[mid]);
-    const int pivot = seq[mid];
-    
-    size_t i = l, j = r;
-    while (i <= j) {
-        while (i <= j && seq[i] < pivot) i++;
-        while (i <= j && seq[j] > pivot) j--;
-        if (i <= j) {
-            std::swap(seq[i++], seq[j--]);
+
+    debug(l);
+    debug(r);
+    cdebug(seq);
+    const int size = r - l;
+    const int m = l + r >> 1;
+    const int pivot = seq[m];
+
+    parlay::parallel_for(l, r, [&flags, &seq, &tmp_seq, pivot](const size_t i) {
+        flags[i] = seq[i] < pivot;
+        tmp_seq[i] = seq[i];
+    });
+    print("filled flags and tmp_seq");
+    cdebug(flags);
+    cdebug(tmp_seq);
+
+    const int left_size = parlay::scan_inclusive_inplace(flags.cut(l, r));
+    print("scanned flags");
+    debug(left_size);
+    cdebug(flags);
+
+    parlay::parallel_for(l, r, [&flags, &seq, &tmp_seq, l](const size_t i) {
+        if ((i == l && flags[i] != 0) || (i != l && flags[i] != flags[i - 1])) {
+            seq[l + flags[i] - 1] = tmp_seq[i];
         }
-    }
+    });
+    print("filled left part");
+    cdebug(seq);
 
-    const size_t left_size = i - l;
-    const size_t right_size = r - (i - 1);
-    
+    parlay::parallel_for(l, r, [&flags, &tmp_seq, pivot](const size_t i) {
+        flags[i] = tmp_seq[i] >= pivot;
+    });
+    print("filled flags for right part");
+    cdebug(flags);
 
-    if (left_size < (r - l + 1) / 10 || right_size < (r - l + 1) / 10) {
-        std::sort(seq.begin() + l, seq.begin() + r + 1);
-        return;
-    }
-    
-    if (left_size > right_size) {
-        parlay::par_do(
-            [&]() { parallel_quick_sort_hybrid(seq, i, r, depth + 1); },
-            []() {}
-        );
-        parallel_quick_sort_hybrid(seq, l, i - 1, depth + 1);
-    } else {
-        parlay::par_do(
-            [&]() { parallel_quick_sort_hybrid(seq, l, i - 1, depth + 1); },
-            []() {}
-        );
-        parallel_quick_sort_hybrid(seq, i, r, depth + 1);
-    }
+    const int right_size = parlay::scan_inclusive_inplace(flags.cut(l, r));
+    assert(left_size + right_size == size);
+    print("scanned flags for right part");
+    cdebug(flags);
+
+    parlay::parallel_for(l, r, [&seq, &tmp_seq, &flags, left_size, l](const size_t i) {
+        if ((i == l && flags[i] != 0) || (i != l && flags[i] != flags[i - 1])) {
+            seq[l + left_size + flags[i] - 1] = tmp_seq[i];
+        }
+    });
+    print("filled left part, now seq should be correct");
+    cdebug(seq);
+
+    auto slice = seq.cut(l, r);
+    auto pivot_it = parlay::find(slice, pivot);
+    assert(pivot_it != slice.end());
+    const size_t pivot_id = l + (pivot_it - slice.begin());
+    const size_t new_pivot_id = l + left_size;
+    std::swap(seq[pivot_id], seq[new_pivot_id]);
+    print("getted pivot_id and swapped it");
+    debug(pivot_id);
+    debug(new_pivot_id);
+    debug(l + left_size);
+    cdebug(seq);
+
+    parlay::parallel_do(
+        [&seq, l, new_pivot_id, &flags, &tmp_seq]() {
+            parallel_quick_sort(seq, l, new_pivot_id, flags, tmp_seq);
+        },
+        [&seq, r, new_pivot_id, &flags, &tmp_seq]() {
+            parallel_quick_sort(seq, new_pivot_id + 1, r, flags, tmp_seq);
+        }
+    );
+    print("finished");
 }
 
 void parallel_sort(std::vector<int>& v) {
-    if (v.empty()) return;
-    
-    std::cout << "Workers: " << parlay::num_workers() 
-              << ", Data size: " << v.size() << std::endl;
-    
-    parlay::sequence<int> seq(v.begin(), v.end());
-    
-    parallel_quick_sort_hybrid(seq, 0, seq.size() - 1);
-    
-    if (v.size() == seq.size()) {
-        parlay::parallel_for(0, v.size(), [&v, &seq](size_t i) {
-            v[i] = seq[i];
-        });
-    } else {
-        std::copy(seq.begin(), seq.end(), v.begin());
+    if (v.empty()) {
+        return;
     }
+
+    parlay::sequence<int> flags(v.size());
+    parlay::sequence<int> tmp_seq(v.size());
+    parlay::sequence<int> seq(v.begin(), v.end());
+    parallel_quick_sort(seq, 0, v.size(), flags, tmp_seq);
+
+    copy_sequence(seq, v);
 }
-
-
-
-
-
-// void parallel_quick_sort(parlay::sequence<int>& seq, int l, int r) {
-//     if (l >= r) return;
-    
-//     const int m = (l + r) >> 1;
-//     const int pivot = seq[m];
-    
-//     auto less = parlay::filter(seq.subseq(l, r+1), [pivot](int x) { return x < pivot; });
-//     auto equal = parlay::filter(seq.subseq(l, r+1), [pivot](int x) { return x == pivot; });
-//     auto greater = parlay::filter(seq.subseq(l, r+1), [pivot](int x) { return x > pivot; });
-    
-//     size_t idx = l;
-//     parlay::parallel_for(0, less.size(), [&](size_t i) { seq[idx + i] = less[i]; }, 1e5);
-//     idx += less.size();
-//     parlay::parallel_for(0, equal.size(), [&](size_t i) { seq[idx + i] = equal[i]; }, 1e5);
-//     idx += equal.size();
-//     parlay::parallel_for(0, greater.size(), [&](size_t i) { seq[idx + i] = greater[i]; }, 1e5);
-    
-//     parallel_quick_sort(seq, l, l + less.size() - 1);
-//     parallel_quick_sort(seq, l + less.size() + equal.size(), r);
-// }
-
-// void parallel_quick_sort_safe(parlay::sequence<int>& seq, size_t l, size_t r) {
-//     if (l >= r || l >= seq.size() || r >= seq.size() || l > r) {
-//         return;
-//     }
-    
-//     const size_t threshold = 1000;
-//     if (r - l + 1 < threshold) {
-//         std::sort(seq.begin() + l, seq.begin() + r + 1);
-//         return;
-//     }
-    
-//     const size_t pivot_idx = l + (r - l) / 2;
-//     if (pivot_idx >= seq.size()) return;
-    
-//     const int pivot = seq[pivot_idx];
-    
-//     const size_t subarray_size = r - l + 1;
-//     if (subarray_size == 0) return;
-    
-//     auto range = parlay::iota(subarray_size);
-    
-//     auto left_indices = parlay::filter(range, [&](size_t idx) {
-//         size_t pos = l + idx;
-//         return pos < seq.size() && seq[pos] <= pivot;
-//     });
-    
-//     auto right_indices = parlay::filter(range, [&](size_t idx) {
-//         size_t pos = l + idx;
-//         return pos < seq.size() && seq[pos] > pivot;
-//     });
-    
-//     if (left_indices.empty() || right_indices.empty()) {
-//         std::sort(seq.begin() + l, seq.begin() + r + 1);
-//         return;
-//     }
-    
-//     auto left_part = parlay::map(left_indices, [&](size_t idx) {
-//         return seq[l + idx];
-//     });
-    
-//     auto right_part = parlay::map(right_indices, [&](size_t idx) {
-//         return seq[l + idx];
-//     });
-    
-//     if (left_part.size() + right_part.size() != subarray_size) {
-//         std::sort(seq.begin() + l, seq.begin() + r + 1);
-//         return;
-//     }
-    
-//     parlay::parallel_for(0, left_part.size(), [&](size_t i) {
-//         if (l + i < seq.size()) seq[l + i] = left_part[i];
-//     });
-    
-//     parlay::parallel_for(0, right_part.size(), [&](size_t i) {
-//         size_t pos = l + left_part.size() + i;
-//         if (pos < seq.size()) seq[pos] = right_part[i];
-//     });
-    
-//     size_t left_size = left_part.size();
-//     size_t split_point = l + left_size - 1;
-    
-//     if (split_point < l || split_point >= seq.size() || split_point + 1 > r) {
-//         // Если разделение некорректное, используем однопоточную сортировку
-//         std::sort(seq.begin() + l, seq.begin() + r + 1);
-//         return;
-//     }
-    
-//     if (left_size > threshold && (subarray_size - left_size) > threshold) {
-//         auto seq_copy1 = seq; // Копия для левой части
-//         auto seq_copy2 = seq; // Копия для правой части
-        
-//         parlay::par_do(
-//             [&]() { 
-//                 parallel_quick_sort_safe(seq_copy1, l, split_point); 
-//                 parlay::parallel_for(l, split_point + 1, [&](size_t i) {
-//                     if (i < seq.size() && i < seq_copy1.size()) 
-//                         seq[i] = seq_copy1[i];
-//                 });
-//             },
-//             [&]() {  
-//                 parallel_quick_sort_safe(seq_copy2, split_point + 1, r);
-//                 parlay::parallel_for(split_point + 1, r + 1, [&](size_t i) {
-//                     if (i < seq.size() && i < seq_copy2.size()) 
-//                         seq[i] = seq_copy2[i];
-//                 });
-//             }
-//         );
-//     } else {
-//         parallel_quick_sort_safe(seq, l, split_point);
-//         parallel_quick_sort_safe(seq, split_point + 1, r);
-//     }
-// }
-
-// void parallel_sort(std::vector<int>& v) {
-//     if (v.empty()) return;
-    
-//     std::cout << "Workers: " << parlay::num_workers() << std::endl;
-    
-//     parlay::sequence<int> seq(v.begin(), v.end());
-    
-//     if (!seq.empty()) {
-//         parallel_quick_sort_safe(seq, 0, seq.size() - 1);
-//     }
-    
-//     const size_t n = std::min(v.size(), seq.size());
-//     parlay::parallel_for(0, n, [&v, &seq](size_t i){
-//         v[i] = seq[i];
-//     });
-// }

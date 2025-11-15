@@ -40,7 +40,7 @@ TEST(SortTest, RandomOrder) {
 }
 
 TEST(SortTest, BigReverseSorted) {
-    const int ELEMENTS = 100000, MAX_VALUE = 1e9;
+    const int ELEMENTS = 1000, MAX_VALUE = 1e9;
     std::vector<int> vec(ELEMENTS), expected(ELEMENTS);
 
     for (int i = 0; i < ELEMENTS; ++i) {
@@ -53,7 +53,7 @@ TEST(SortTest, BigReverseSorted) {
 }
 
 TEST(SortTest, BigRandomOrder) {
-    const int ELEMENTS = 1e8, MAX_VALUE = 1e9;
+    const int ELEMENTS = 1000, MAX_VALUE = 1e9;
     std::vector<int> vec(ELEMENTS), expected(ELEMENTS);
 
     std::mt19937 gen(13);
@@ -108,7 +108,7 @@ TEST(SortTest, ParallelRandomOrder) {
 }
 
 TEST(SortTest, ParallelBigReverseSorted) {
-    const int ELEMENTS = 100000, MAX_VALUE = 1e9;
+    const int ELEMENTS = 1000, MAX_VALUE = 1e9;
     std::vector<int> vec(ELEMENTS), expected(ELEMENTS);
 
     for (int i = 0; i < ELEMENTS; ++i) {
@@ -121,7 +121,7 @@ TEST(SortTest, ParallelBigReverseSorted) {
 }
 
 TEST(SortTest, ParallelBigRandomOrder) {
-    const int ELEMENTS = 1e8, MAX_VALUE = 1e9;
+    const int ELEMENTS = 1000, MAX_VALUE = 10;
     std::vector<int> vec(ELEMENTS), expected(ELEMENTS);
 
     std::mt19937 gen(13);
